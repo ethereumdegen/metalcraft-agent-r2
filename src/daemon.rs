@@ -396,7 +396,7 @@ pub async fn run(config: DaemonConfig) -> Result<(), DynError> {
             // Auto-resume any paused run whose wake time has arrived: `wait`
             // nodes (via the `after` handle) and `approval` nodes that timed out
             // (via the `timeout` handle).
-            for run in crate::flow_runs::list_runs(&crate::paths::runs_dir()) {
+            for run in crate::store::store().flow_runs().list() {
                 if run.status != "paused" {
                     continue;
                 }

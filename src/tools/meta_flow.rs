@@ -296,7 +296,7 @@ impl metalcraft::Tool for FlowRunStatusTool {
     }
     async fn call(&self, args: serde_json::Value) -> metalcraft::Result<serde_json::Value> {
         let run_id = args["run_id"].as_str().ok_or_else(|| missing_param("flow_run_status", "run_id"))?;
-        match crate::flow_runs::load_run(&paths::runs_dir(), run_id) {
+        match crate::store::store().flow_runs().load(run_id) {
             Some(run) => Ok(serde_json::to_value(run).unwrap_or(serde_json::Value::Null)),
             None => Ok(serde_json::json!({ "error": format!("run '{run_id}' not found") })),
         }
@@ -322,7 +322,7 @@ impl metalcraft::Tool for FlowRunsListTool {
     }
     async fn call(&self, args: serde_json::Value) -> metalcraft::Result<serde_json::Value> {
         let filter = args["flow_id"].as_str();
-        let mut runs = crate::flow_runs::list_runs(&paths::runs_dir());
+        let mut runs = crate::store::store().flow_runs().list();
         if let Some(f) = filter {
             runs.retain(|r| r.flow_id == f);
         }

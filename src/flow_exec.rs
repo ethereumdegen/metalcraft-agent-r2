@@ -297,13 +297,12 @@ impl<'a> FlowExecutor<'a> {
 
     /// Write (or overwrite) this run's `runs/{id}.json` in the paused state.
     fn persist_paused(&self, node_id: &str, spec: &PauseSpec) {
-        let dir = crate::paths::runs_dir();
         let now = Utc::now().to_rfc3339();
         // Preserve the original created_at across pause/resume cycles.
         let created_at = self
             .created_at
             .clone()
-            .or_else(|| crate::flow_runs::load_run(&dir, &self.run_id).map(|r| r.created_at))
+            .or_else(|| crate::store::store().flow_runs().load(&self.run_id).map(|r| r.created_at))
             .unwrap_or_else(|| now.clone());
         let run = FlowRun {
             id: self.run_id.clone(),
@@ -325,7 +324,7 @@ impl<'a> FlowExecutor<'a> {
             created_at,
             updated_at: now,
         };
-        if let Err(e) = crate::flow_runs::save_run(&dir, &run) {
+        if let Err(e) = crate::store::store().flow_runs().save(&run) {
             eprintln!("flow run: failed to persist paused run '{}': {e}", self.run_id);
         }
     }
@@ -338,14 +337,13 @@ impl<'a> FlowExecutor<'a> {
         if let Some(l) = &self.logger {
             l.log_config_change("flow_result", serde_json::json!({ "status": status }));
         }
-        let dir = crate::paths::runs_dir();
-        if let Some(mut run) = crate::flow_runs::load_run(&dir, &self.run_id) {
+        if let Some(mut run) = crate::store::store().flow_runs().load(&self.run_id) {
             run.status = status.to_string();
             run.pause = None;
             run.variables = self.variables.as_value().clone();
             run.steps = self.steps.clone();
             run.updated_at = Utc::now().to_rfc3339();
-            let _ = crate::flow_runs::save_run(&dir, &run);
+            let _ = crate::store::store().flow_runs().save(&run);
         }
     }
 
@@ -987,8 +985,7 @@ pub async fn resume_flow(
     handle: &str,
     data: Option<Value>,
 ) -> Result<FlowRunSummary, String> {
-    let dir = crate::paths::runs_dir();
-    let run = crate::flow_runs::load_run(&dir, run_id)
+    let run = crate::store::store().flow_runs().load(run_id)
         .ok_or_else(|| format!("run '{run_id}' not found"))?;
     if run.status != "paused" {
         return Err(format!("run '{run_id}' is '{}', not paused", run.status));

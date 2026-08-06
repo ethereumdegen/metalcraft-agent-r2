@@ -1452,7 +1452,7 @@ async fn post_run_flow(
 async fn list_flow_runs(
     axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Response {
-    let mut runs = crate::flow_runs::list_runs(&paths::runs_dir());
+    let mut runs = crate::store::store().flow_runs().list();
     if let Some(f) = q.get("flow_id") {
         runs.retain(|r| &r.flow_id == f);
     }
@@ -1469,7 +1469,7 @@ async fn list_flow_runs(
     responses((status = 200, description = "Flow run detail", body = Object), (status = 404, body = ErrorResponse)),
 )]
 async fn get_flow_run(Path(run_id): Path<String>) -> Response {
-    match crate::flow_runs::load_run(&paths::runs_dir(), &run_id) {
+    match crate::store::store().flow_runs().load(&run_id) {
         Some(run) => Json(run).into_response(),
         None => err_json(StatusCode::NOT_FOUND, format!("run '{run_id}' not found")),
     }

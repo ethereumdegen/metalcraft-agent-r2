@@ -11,11 +11,13 @@
 
 use std::sync::OnceLock;
 
+use crate::flow_runs::FlowRun;
 use crate::workshop_api::PersistedChat;
 
 /// The storage port. One process-wide instance, obtained via [`store`].
 pub(crate) trait Store: Send + Sync {
     fn chats(&self) -> &dyn ChatStore;
+    fn flow_runs(&self) -> &dyn FlowRunStore;
 }
 
 /// Persistence for chat transcripts (`<data>/chats/<id>.json` in the files backend).
@@ -26,6 +28,14 @@ pub(crate) trait ChatStore: Send + Sync {
     fn load_all(&self) -> Vec<PersistedChat>;
     /// Delete the transcript for `id` if present.
     fn delete(&self, id: &str);
+}
+
+/// Persistence for paused/terminal flow runs (`<data>/runs/<id>.json` in the files backend).
+pub(crate) trait FlowRunStore: Send + Sync {
+    fn save(&self, run: &FlowRun) -> std::io::Result<()>;
+    fn load(&self, id: &str) -> Option<FlowRun>;
+    fn delete(&self, id: &str) -> bool;
+    fn list(&self) -> Vec<FlowRun>;
 }
 
 /// Process-wide store, initialized once from `METALCRAFT_STORE`.
@@ -52,6 +62,10 @@ impl Store for FilesStore {
     fn chats(&self) -> &dyn ChatStore {
         static CHATS: FilesChats = FilesChats;
         &CHATS
+    }
+    fn flow_runs(&self) -> &dyn FlowRunStore {
+        static RUNS: FilesFlowRuns = FilesFlowRuns;
+        &RUNS
     }
 }
 
@@ -100,5 +114,24 @@ impl ChatStore for FilesChats {
                 log::warn!("failed to delete chat file {}: {e}", path.display());
             }
         }
+    }
+}
+
+/// Files backend for flow runs — delegates to the existing `crate::flow_runs` free functions
+/// with `runs_dir()` resolved internally (every call site used `paths::runs_dir()`).
+struct FilesFlowRuns;
+
+impl FlowRunStore for FilesFlowRuns {
+    fn save(&self, run: &FlowRun) -> std::io::Result<()> {
+        crate::flow_runs::save_run(&crate::paths::runs_dir(), run)
+    }
+    fn load(&self, id: &str) -> Option<FlowRun> {
+        crate::flow_runs::load_run(&crate::paths::runs_dir(), id)
+    }
+    fn delete(&self, id: &str) -> bool {
+        crate::flow_runs::delete_run(&crate::paths::runs_dir(), id)
+    }
+    fn list(&self) -> Vec<FlowRun> {
+        crate::flow_runs::list_runs(&crate::paths::runs_dir())
     }
 }
