@@ -83,7 +83,7 @@ impl metalcraft::Tool for SubAgentTool {
             let missing: Vec<String> = persona
                 .packs
                 .iter()
-                .filter(|p| !crate::integration_packs::is_enabled(p))
+                .filter(|p| !crate::store::store().packs().is_enabled(p))
                 .cloned()
                 .collect();
             if !missing.is_empty() {

@@ -109,11 +109,11 @@ fn resolve_pipestreamr_channel(
     from: Option<&str>,
 ) -> Result<gateway_channels::ChannelInstance, String> {
     if let Some(f) = from {
-        return gateway_channels::resolve_by_setting("integration_id", f)
-            .or_else(|| gateway_channels::resolve_by_setting("from", f))
+        return crate::store::store().gateway().resolve_by_setting("integration_id", f)
+            .or_else(|| crate::store::store().gateway().resolve_by_setting("from", f))
             .ok_or_else(|| format!("no enabled channel matches from='{f}'"));
     }
-    let mut candidates: Vec<_> = gateway_channels::enabled_instances()
+    let mut candidates: Vec<_> = crate::store::store().gateway().enabled_instances()
         .into_iter()
         .filter(|c| {
             gateway_channels::find_type(&c.type_id).map(|t| t.adapter).as_deref() == Some("pipestreamr")
@@ -141,8 +141,8 @@ fn record_outbound(
     result: &Result<serde_json::Value, String>,
 ) {
     let channel = from.and_then(|f| {
-        gateway_channels::resolve_by_setting("integration_id", f)
-            .or_else(|| gateway_channels::resolve_by_setting("from", f))
+        crate::store::store().gateway().resolve_by_setting("integration_id", f)
+            .or_else(|| crate::store::store().gateway().resolve_by_setting("from", f))
     });
     let (outcome, detail) = match result {
         Ok(_) => ("sent", None),

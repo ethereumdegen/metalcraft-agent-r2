@@ -93,7 +93,7 @@ impl metalcraft::Tool for ScheduleFollowupTool {
                 message: e,
             })?;
 
-        let armed = scheduled_tasks::add(NewTask {
+        let armed = crate::store::store().scheduled().add(NewTask {
             io_binding: self.binding.clone().unwrap_or(IoBinding::Unbound),
             run_at,
             task: task.to_string(),

@@ -134,7 +134,7 @@ fn maybe_autoenable_ecosystem_packs() {
     let ids = crate::integration_packs::ecosystem_pack_ids();
     let mut enabled = Vec::new();
     for id in &ids {
-        match crate::integration_packs::set_enabled(id, true) {
+        match crate::store::store().packs().set_enabled(id, true) {
             Ok(()) => enabled.push(id.clone()),
             Err(e) => log::warn!("auto-enable: could not enable ecosystem pack '{id}': {e}"),
         }
@@ -463,12 +463,12 @@ async fn run_due_scheduled_tasks(
     model_name: &str,
     approval_mode: &ApprovalMode,
 ) {
-    use crate::scheduled_tasks::{self, TaskStatus};
+    use crate::scheduled_tasks::TaskStatus;
 
     use crate::scheduled_tasks::IoBinding;
     use crate::workshop_api::FollowupDelivery;
 
-    let due = scheduled_tasks::claim_due(chrono::Utc::now());
+    let due = crate::store::store().scheduled().claim_due(chrono::Utc::now());
     for task in due {
         log::info!("Running scheduled follow-up {}: {}", task.id, task.task);
 
@@ -478,19 +478,19 @@ async fn run_due_scheduled_tasks(
             IoBinding::WorkshopChat { chat_id } => {
                 match workshop_api::deliver_followup_to_chat(context, chat_id, &task.task).await {
                     FollowupDelivery::Delivered => {
-                        scheduled_tasks::mark(&task.id, TaskStatus::Done);
+                        crate::store::store().scheduled().mark(&task.id, TaskStatus::Done);
                     }
                     FollowupDelivery::ChatBusy => {
                         // Retry shortly rather than dropping it.
                         log::info!("Chat {chat_id} busy; requeuing follow-up {}", task.id);
-                        scheduled_tasks::requeue(
+                        crate::store::store().scheduled().requeue(
                             &task.id,
                             chrono::Utc::now() + chrono::Duration::seconds(30),
                         );
                     }
                     FollowupDelivery::ChatMissing => {
                         log::warn!("Chat {chat_id} gone; dropping follow-up {}", task.id);
-                        scheduled_tasks::mark(&task.id, TaskStatus::Failed);
+                        crate::store::store().scheduled().mark(&task.id, TaskStatus::Failed);
                     }
                 }
             }
@@ -520,15 +520,15 @@ async fn run_due_scheduled_tasks(
                             task.id,
                             task.io_binding
                         );
-                        scheduled_tasks::mark(&task.id, TaskStatus::Done);
+                        crate::store::store().scheduled().mark(&task.id, TaskStatus::Done);
                     }
                     Ok(other) => {
                         log::warn!("Scheduled follow-up {} did not complete: {other:?}", task.id);
-                        scheduled_tasks::mark(&task.id, TaskStatus::Failed);
+                        crate::store::store().scheduled().mark(&task.id, TaskStatus::Failed);
                     }
                     Err(e) => {
                         log::error!("Scheduled follow-up {} errored: {e}", task.id);
-                        scheduled_tasks::mark(&task.id, TaskStatus::Failed);
+                        crate::store::store().scheduled().mark(&task.id, TaskStatus::Failed);
                     }
                 }
             }

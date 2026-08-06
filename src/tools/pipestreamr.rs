@@ -58,16 +58,16 @@ impl PipeCfg {
             // Prefer the audience-scoped connection token adopted at connect;
             // fall back to deriving from the pod's broad METALCRAFT_TOKEN (the
             // pre-broker path, and a safety net if the token is ever missing).
-            crate::key_store::lookup_scoped(Some(&channel.id), "API_KEY")
+            crate::store::store().keys().lookup_scoped(Some(&channel.id), "API_KEY")
                 .filter(|s| !s.is_empty())
-                .or_else(|| crate::key_store::lookup("METALCRAFT_TOKEN").filter(|s| !s.is_empty()))
+                .or_else(|| crate::store::store().keys().lookup("METALCRAFT_TOKEN").filter(|s| !s.is_empty()))
                 .ok_or("METALCRAFT_TOKEN is not set — this pod isn't linked to a Metalcraft ID account")?
         } else {
-            crate::key_store::lookup_scoped(Some(&channel.id), "API_KEY")
+            crate::store::store().keys().lookup_scoped(Some(&channel.id), "API_KEY")
                 .filter(|s| !s.is_empty())
                 .ok_or("no API key configured for this channel (add its API_KEY secret)")?
         };
-        let base_url = crate::key_store::lookup_scoped(Some(&channel.id), "BASE_URL")
+        let base_url = crate::store::store().keys().lookup_scoped(Some(&channel.id), "BASE_URL")
             .map(|s| s.trim().trim_end_matches('/').to_string())
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| DEFAULT_BASE.to_string());
@@ -78,7 +78,7 @@ impl PipeCfg {
 /// The inbound HMAC secret for `channel`: its `WEBHOOK_SECRET` secret. `None`
 /// when unconfigured.
 pub fn channel_webhook_secret(channel: &ChannelInstance) -> Option<String> {
-    crate::key_store::lookup_scoped(Some(&channel.id), "WEBHOOK_SECRET")
+    crate::store::store().keys().lookup_scoped(Some(&channel.id), "WEBHOOK_SECRET")
         .filter(|s| !s.is_empty())
 }
 

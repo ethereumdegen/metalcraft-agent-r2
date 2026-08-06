@@ -46,16 +46,16 @@ pub async fn send_whatsapp(
     content: &str,
     from: Option<&str>,
 ) -> Result<serde_json::Value, String> {
-    let account_sid = crate::key_store::lookup("TWILIO_ACCOUNT_SID")
+    let account_sid = crate::store::store().keys().lookup("TWILIO_ACCOUNT_SID")
         .filter(|s| !s.is_empty())
         .ok_or("TWILIO_ACCOUNT_SID is not set (add it in the workshop's keys, or export it)")?;
-    let auth_token = crate::key_store::lookup("TWILIO_AUTH_TOKEN")
+    let auth_token = crate::store::store().keys().lookup("TWILIO_AUTH_TOKEN")
         .filter(|s| !s.is_empty())
         .ok_or("TWILIO_AUTH_TOKEN is not set (add it in the workshop's keys, or export it)")?;
     let from = from
         .map(str::to_string)
         .filter(|s| !s.trim().is_empty())
-        .or_else(|| crate::key_store::lookup("TWILIO_WHATSAPP_FROM").filter(|s| !s.is_empty()))
+        .or_else(|| crate::store::store().keys().lookup("TWILIO_WHATSAPP_FROM").filter(|s| !s.is_empty()))
         .ok_or("no sender number: pass `from` or set the TWILIO_WHATSAPP_FROM key")?;
 
     let url = format!("{TWILIO_API_BASE}/Accounts/{account_sid}/Messages.json");

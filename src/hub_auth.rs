@@ -35,7 +35,7 @@ const CACHE_TTL: Duration = Duration::from_secs(60);
 /// The Metalcraft ID base URL for server→server calls. Override with the
 /// `METALCRAFT_ID_URL` key or `HUB_INTERNAL_URL` env; defaults to production.
 fn hub_url() -> String {
-    crate::key_store::lookup("METALCRAFT_ID_URL")
+    crate::store::store().keys().lookup("METALCRAFT_ID_URL")
         .or_else(|| std::env::var("HUB_INTERNAL_URL").ok())
         .map(|s| s.trim().trim_end_matches('/').to_string())
         .filter(|s| !s.is_empty())
@@ -84,7 +84,7 @@ async fn owner_sub() -> Option<String> {
     if let Some(s) = cell.lock().unwrap_or_else(|e| e.into_inner()).clone() {
         return Some(s);
     }
-    let tok = crate::key_store::lookup("METALCRAFT_TOKEN").filter(|s| !s.is_empty())?;
+    let tok = crate::store::store().keys().lookup("METALCRAFT_TOKEN").filter(|s| !s.is_empty())?;
     let v = verify_raw(&tok).await?;
     if !v.active {
         return None;

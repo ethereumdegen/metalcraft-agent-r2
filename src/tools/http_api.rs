@@ -159,7 +159,7 @@ impl HttpApiTool {
                 break;
             }
             let var_name = &rest[..end];
-            let replacement = crate::key_store::lookup(var_name).unwrap_or_default();
+            let replacement = crate::store::store().keys().lookup(var_name).unwrap_or_default();
             result = format!("{}{}{}", &result[..start], replacement, &rest[end..]);
         }
         result

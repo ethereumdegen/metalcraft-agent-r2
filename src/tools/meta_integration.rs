@@ -30,7 +30,7 @@ fn pack_summary(pack: &crate::integration_packs::Pack) -> serde_json::Value {
         .map(|name| {
             serde_json::json!({
                 "name": name,
-                "configured": crate::key_store::lookup(name).is_some(),
+                "configured": crate::store::store().keys().lookup(name).is_some(),
             })
         })
         .collect();
@@ -39,7 +39,7 @@ fn pack_summary(pack: &crate::integration_packs::Pack) -> serde_json::Value {
         "name": pack.manifest.name,
         "description": pack.manifest.description,
         "version": pack.manifest.version,
-        "enabled": crate::integration_packs::is_enabled(id),
+        "enabled": crate::store::store().packs().is_enabled(id),
         "requires_env": requires_env,
     })
 }
@@ -126,7 +126,7 @@ impl metalcraft::Tool for PackEnableTool {
     async fn call(&self, args: serde_json::Value) -> metalcraft::Result<serde_json::Value> {
         let id = id_arg(&args, "pack_enable")?;
         let enabled = args["enabled"].as_bool().unwrap_or(true);
-        match crate::integration_packs::set_enabled(&id, enabled) {
+        match crate::store::store().packs().set_enabled(&id, enabled) {
             Ok(()) => {
                 // Re-read the pack so the caller sees the new state plus which
                 // required keys are still missing.

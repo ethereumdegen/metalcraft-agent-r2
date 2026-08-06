@@ -45,16 +45,16 @@ struct Creds {
 /// Read the IMAP credentials from the key store. Returns a user-facing error
 /// naming exactly which key is missing.
 fn creds(tool: &str) -> metalcraft::Result<Creds> {
-    let host = crate::key_store::lookup("IMAP_HOST")
+    let host = crate::store::store().keys().lookup("IMAP_HOST")
         .filter(|s| !s.is_empty())
         .ok_or_else(|| err(tool, "IMAP_HOST is not set (e.g. imap.gmail.com)"))?;
-    let user = crate::key_store::lookup("IMAP_USER")
+    let user = crate::store::store().keys().lookup("IMAP_USER")
         .filter(|s| !s.is_empty())
         .ok_or_else(|| err(tool, "IMAP_USER is not set (your full email address)"))?;
-    let password = crate::key_store::lookup("IMAP_PASSWORD")
+    let password = crate::store::store().keys().lookup("IMAP_PASSWORD")
         .filter(|s| !s.is_empty())
         .ok_or_else(|| err(tool, "IMAP_PASSWORD is not set (use an App Password for Gmail)"))?;
-    let port = crate::key_store::lookup("IMAP_PORT")
+    let port = crate::store::store().keys().lookup("IMAP_PORT")
         .and_then(|s| s.trim().parse::<u16>().ok())
         .unwrap_or(DEFAULT_PORT);
     Ok(Creds { host, port, user, password })

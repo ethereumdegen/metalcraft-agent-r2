@@ -256,10 +256,9 @@ pub fn delete_instance(id: &str) -> Result<bool, String> {
     if removed {
         save_instances(&all).map_err(|e| format!("failed to write state: {e}"))?;
         // Cascade: drop this channel's secret scope from the key store.
-        let path = paths::keys_file();
-        let mut store = crate::key_store::KeyStore::load(&path);
+        let mut store = crate::store::store().keys().load();
         if store.delete_channel(id) {
-            if let Err(e) = store.save(&path) {
+            if let Err(e) = crate::store::store().keys().save(&store) {
                 log::warn!("deleted channel '{id}' but failed to prune its secrets: {e}");
             }
         }

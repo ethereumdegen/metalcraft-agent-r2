@@ -1035,7 +1035,7 @@ struct KeyScopeQuery {
 
 /// Global-scope masked keys — for the load-time snapshot and the sidebar.
 fn list_key_summaries() -> Vec<KeySummary> {
-    crate::key_store::KeyStore::load(&paths::keys_file())
+    crate::store::store().keys().load()
         .list_masked()
         .into_iter()
         .map(|(name, masked)| KeySummary { name, masked })
@@ -1045,7 +1045,7 @@ fn list_key_summaries() -> Vec<KeySummary> {
 /// Whether a channel's secrets are managed by its connection (provisioner-backed
 /// types like `metalcraft-gateway`) — such secrets are read-only in the UI.
 fn is_channel_managed(channel_id: &str) -> bool {
-    crate::gateway_channels::get_instance(channel_id)
+    crate::store::store().gateway().get_instance(channel_id)
         .and_then(|i| crate::gateway_channels::find_type(&i.type_id))
         .and_then(|t| t.provisioner)
         .is_some()
@@ -1053,8 +1053,8 @@ fn is_channel_managed(channel_id: &str) -> bool {
 
 /// All stored keys with scope + managed flags, for the scope-aware Keys page.
 fn list_key_entries() -> Vec<KeyEntry> {
-    let store = crate::key_store::KeyStore::load(&paths::keys_file());
-    let instances = crate::gateway_channels::load_instances();
+    let store = crate::store::store().keys().load();
+    let instances = crate::store::store().gateway().load_instances();
     store
         .list_scoped()
         .into_iter()
@@ -1124,7 +1124,7 @@ async fn list_recommended_keys() -> Json<Vec<RecommendedKey>> {
     let out = merged
         .into_iter()
         .map(|(name, packs)| RecommendedKey {
-            configured: crate::key_store::lookup(&name).is_some(),
+            configured: crate::store::store().keys().lookup(&name).is_some(),
             managed: crate::key_store::is_env_authoritative(&name),
             name,
             packs,
@@ -1152,8 +1152,7 @@ async fn put_key(Path(name): Path<String>, Json(body): Json<KeyValueBody>) -> Re
     if body.value.is_empty() {
         return err_json(StatusCode::BAD_REQUEST, "key value must not be empty");
     }
-    let path = paths::keys_file();
-    let mut store = crate::key_store::KeyStore::load(&path);
+    let mut store = crate::store::store().keys().load();
     let (scope, channel_id, channel_name) = match body.channel_id.as_deref() {
         Some(cid) => {
             if is_channel_managed(cid) {
@@ -1163,7 +1162,7 @@ async fn put_key(Path(name): Path<String>, Json(body): Json<KeyValueBody>) -> Re
                 );
             }
             store.upsert_channel(cid, &name, &body.value);
-            let cname = crate::gateway_channels::get_instance(cid).map(|i| i.name);
+            let cname = crate::store::store().gateway().get_instance(cid).map(|i| i.name);
             ("channel".to_string(), Some(cid.to_string()), cname)
         }
         None => {
@@ -1177,7 +1176,7 @@ async fn put_key(Path(name): Path<String>, Json(body): Json<KeyValueBody>) -> Re
             ("global".to_string(), None, None)
         }
     };
-    match store.save(&path) {
+    match crate::store::store().keys().save(&store) {
         Ok(()) => Json(KeyEntry {
             masked: crate::key_store::mask(&body.value),
             name,
@@ -1204,7 +1203,7 @@ async fn put_key(Path(name): Path<String>, Json(body): Json<KeyValueBody>) -> Re
     responses((status = 200, body = KeyRevealResponse), (status = 404, body = ErrorResponse)),
 )]
 async fn reveal_key(Path(name): Path<String>, Query(q): Query<KeyScopeQuery>) -> Response {
-    let store = crate::key_store::KeyStore::load(&paths::keys_file());
+    let store = crate::store::store().keys().load();
     let value = match q.channel_id.as_deref() {
         Some(cid) => store.get_channel(cid, &name).map(str::to_string),
         None => store.get(&name).map(str::to_string),
@@ -1225,8 +1224,7 @@ async fn reveal_key(Path(name): Path<String>, Query(q): Query<KeyScopeQuery>) ->
     responses((status = 200, description = "Deleted")),
 )]
 async fn delete_key(Path(name): Path<String>, Query(q): Query<KeyScopeQuery>) -> Response {
-    let path = paths::keys_file();
-    let mut store = crate::key_store::KeyStore::load(&path);
+    let mut store = crate::store::store().keys().load();
     let removed = match q.channel_id.as_deref() {
         Some(cid) => {
             if is_channel_managed(cid) {
@@ -1250,7 +1248,7 @@ async fn delete_key(Path(name): Path<String>, Query(q): Query<KeyScopeQuery>) ->
     if !removed {
         return err_json(StatusCode::NOT_FOUND, format!("key '{name}' not found"));
     }
-    match store.save(&path) {
+    match crate::store::store().keys().save(&store) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to write: {e}")),
     }
@@ -2429,7 +2427,7 @@ async fn get_chat_events(State(_state): State<Arc<ApiState>>, Path(id): Path<Str
     responses((status = 200, description = "Scheduled follow-ups", body = Object)),
 )]
 async fn list_scheduled_tasks(State(_state): State<Arc<ApiState>>) -> Response {
-    Json(crate::scheduled_tasks::list()).into_response()
+    Json(crate::store::store().scheduled().list()).into_response()
 }
 
 /// Cancel a pending scheduled follow-up.
@@ -2444,7 +2442,7 @@ async fn delete_scheduled_task(
     State(_state): State<Arc<ApiState>>,
     Path(id): Path<String>,
 ) -> Response {
-    match crate::scheduled_tasks::cancel(&id) {
+    match crate::store::store().scheduled().cancel(&id) {
         Ok(true) => (StatusCode::OK, Json(serde_json::json!({ "cancelled": true }))).into_response(),
         Ok(false) => err_json(StatusCode::NOT_FOUND, "no pending follow-up with that id"),
         Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, e),
@@ -2705,7 +2703,7 @@ fn list_file_stems(dir: &std::path::Path, ext: &str) -> Vec<String> {
     responses((status = 200, body = Vec<IntegrationPackSummary>)),
 )]
 async fn list_integration_packs() -> Json<Vec<IntegrationPackSummary>> {
-    let state = crate::integration_packs::load_state();
+    let state = crate::store::store().packs().load_state();
     let packs = crate::integration_packs::list_installed();
     let summaries = packs
         .into_iter()
@@ -2743,7 +2741,7 @@ async fn get_integration_pack(Path(id): Path<String>) -> Response {
     else {
         return err_json(StatusCode::NOT_FOUND, format!("pack '{id}' not found"));
     };
-    let enabled = crate::integration_packs::is_enabled(&id);
+    let enabled = crate::store::store().packs().is_enabled(&id);
     // Read file lists before moving the manifest fields out of `pack`.
     let personas = list_file_stems(&pack.personas_dir(), "json");
     let skills = list_file_stems(&pack.skills_dir(), "md");
@@ -2785,7 +2783,7 @@ async fn put_pack_enabled(
     Path(id): Path<String>,
     Json(req): Json<SetEnabledRequest>,
 ) -> Response {
-    match crate::integration_packs::set_enabled(&id, req.enabled) {
+    match crate::store::store().packs().set_enabled(&id, req.enabled) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => err_json(StatusCode::BAD_REQUEST, e),
     }
@@ -2819,7 +2817,7 @@ async fn list_gateway_types() -> Json<Vec<crate::gateway_channels::ChannelType>>
     responses((status = 200, body = Vec<crate::gateway_channels::ChannelInstance>)),
 )]
 async fn list_gateway_channels() -> Json<Vec<crate::gateway_channels::ChannelInstance>> {
-    Json(crate::gateway_channels::load_instances())
+    Json(crate::store::store().gateway().load_instances())
 }
 
 /// Recent inbound/outbound activity for a single channel (newest first).
@@ -2940,7 +2938,7 @@ struct CreateGatewayChannelRequest {
     responses((status = 201, body = crate::gateway_channels::ChannelInstance), (status = 400, body = ErrorResponse)),
 )]
 async fn post_create_gateway_channel(Json(req): Json<CreateGatewayChannelRequest>) -> Response {
-    match crate::gateway_channels::create_instance(&req.type_id, &req.name, req.settings) {
+    match crate::store::store().gateway().create_instance(&req.type_id, &req.name, req.settings) {
         Ok(instance) => (StatusCode::CREATED, Json(instance)).into_response(),
         Err(e) => err_json(StatusCode::BAD_REQUEST, e),
     }
@@ -2967,7 +2965,7 @@ async fn put_gateway_channel(
     Path(id): Path<String>,
     Json(req): Json<UpdateGatewayChannelRequest>,
 ) -> Response {
-    match crate::gateway_channels::update_instance(&id, &req.name, req.enabled, req.settings) {
+    match crate::store::store().gateway().update_instance(&id, &req.name, req.enabled, req.settings) {
         Ok(instance) => Json(instance).into_response(),
         Err(e) => err_json(StatusCode::BAD_REQUEST, e),
     }
@@ -2985,7 +2983,7 @@ async fn put_gateway_channel_enabled(
     Path(id): Path<String>,
     Json(req): Json<SetEnabledRequest>,
 ) -> Response {
-    match crate::gateway_channels::set_enabled(&id, req.enabled) {
+    match crate::store::store().gateway().set_enabled(&id, req.enabled) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => err_json(StatusCode::BAD_REQUEST, e),
     }
@@ -2999,7 +2997,7 @@ async fn put_gateway_channel_enabled(
     responses((status = 200, description = "Deleted")),
 )]
 async fn delete_gateway_channel(Path(id): Path<String>) -> Response {
-    match crate::gateway_channels::delete_instance(&id) {
+    match crate::store::store().gateway().delete_instance(&id) {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => err_json(StatusCode::NOT_FOUND, format!("channel '{id}' not found")),
         Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, e),
@@ -3044,7 +3042,7 @@ async fn handle_twilio_webhook(
     // public URL Twilio signed, so this is gated on TWILIO_WEBHOOK_BASE_URL
     // being set to that URL's origin (e.g. https://agent.example.com).
     if let Some(base) = std::env::var("TWILIO_WEBHOOK_BASE_URL").ok().filter(|s| !s.is_empty()) {
-        let token = crate::key_store::lookup("TWILIO_AUTH_TOKEN").unwrap_or_default();
+        let token = crate::store::store().keys().lookup("TWILIO_AUTH_TOKEN").unwrap_or_default();
         let signature = headers
             .get("x-twilio-signature")
             .and_then(|v| v.to_str().ok())
@@ -3068,7 +3066,7 @@ async fn handle_twilio_webhook(
         return StatusCode::OK;
     };
 
-    let Some(channel) = crate::gateway_channels::resolve_by_inbound_to(&inbound.to) else {
+    let Some(channel) = crate::store::store().gateway().resolve_by_inbound_to(&inbound.to) else {
         log::warn!(
             "Twilio webhook for '{}' matched no enabled WhatsApp channel — ignoring",
             inbound.to
@@ -3193,7 +3191,7 @@ async fn route_pipestreamr_inbound(
         });
         return StatusCode::OK;
     };
-    let Some(channel) = crate::gateway_channels::resolve_by_setting("integration_id", &source_id) else {
+    let Some(channel) = crate::store::store().gateway().resolve_by_setting("integration_id", &source_id) else {
         log::warn!("PipeStreamr webhook for integration '{source_id}' matched no enabled channel — ignoring");
         crate::gateway_activity::record(crate::gateway_activity::GatewayEvent {
             direction: "inbound".into(),
@@ -3511,7 +3509,7 @@ fn gateway_reply_sink(
         let channel_name = channel_name.clone();
         Box::pin(async move {
             let result = match adapter.as_str() {
-                "pipestreamr" => match crate::gateway_channels::get_instance(&channel_id) {
+                "pipestreamr" => match crate::store::store().gateway().get_instance(&channel_id) {
                     Some(channel) => match crate::tools::pipestreamr::PipeCfg::for_channel(&channel) {
                         Ok(cfg) => {
                             crate::tools::pipestreamr::send(&recipient, &content, from.as_deref(), &cfg).await

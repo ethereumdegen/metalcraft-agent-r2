@@ -183,13 +183,13 @@ struct RawResponse {
 impl Spaces {
     /// Resolve credentials from the key store / environment.
     fn from_env(tool: &str) -> metalcraft::Result<Self> {
-        let access_key = crate::key_store::lookup("DO_SPACES_KEY")
+        let access_key = crate::store::store().keys().lookup("DO_SPACES_KEY")
             .filter(|s| !s.is_empty())
             .ok_or_else(|| err(tool, "DO_SPACES_KEY is not set (add it in the workshop's keys, or export it)"))?;
-        let secret_key = crate::key_store::lookup("DO_SPACES_SECRET")
+        let secret_key = crate::store::store().keys().lookup("DO_SPACES_SECRET")
             .filter(|s| !s.is_empty())
             .ok_or_else(|| err(tool, "DO_SPACES_SECRET is not set (add it in the workshop's keys, or export it)"))?;
-        let region = crate::key_store::lookup("DO_SPACES_REGION")
+        let region = crate::store::store().keys().lookup("DO_SPACES_REGION")
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| DEFAULT_REGION.to_string());
         let host = format!("{region}.digitaloceanspaces.com");

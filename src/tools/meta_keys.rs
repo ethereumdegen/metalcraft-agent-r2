@@ -10,8 +10,6 @@
 
 use async_trait::async_trait;
 
-use crate::key_store::KeyStore;
-use crate::paths;
 use crate::tools::missing_param;
 
 fn name_arg(args: &serde_json::Value, tool: &str) -> metalcraft::Result<String> {
@@ -35,7 +33,7 @@ impl metalcraft::Tool for KeyListTool {
         serde_json::json!({ "type": "object", "properties": {}, "required": [] })
     }
     async fn call(&self, _args: serde_json::Value) -> metalcraft::Result<serde_json::Value> {
-        let configured: Vec<serde_json::Value> = KeyStore::load(&paths::keys_file())
+        let configured: Vec<serde_json::Value> = crate::store::store().keys().load()
             .list_masked()
             .into_iter()
             .map(|(name, masked)| serde_json::json!({ "name": name, "masked": masked }))
@@ -46,7 +44,7 @@ impl metalcraft::Tool for KeyListTool {
                 serde_json::json!({
                     "name": name,
                     "packs": packs,
-                    "configured": crate::key_store::lookup(&name).is_some(),
+                    "configured": crate::store::store().keys().lookup(&name).is_some(),
                     "managed": crate::key_store::is_env_authoritative(&name),
                 })
             })
@@ -86,10 +84,9 @@ impl metalcraft::Tool for KeySetTool {
         if value.is_empty() {
             return Ok(serde_json::json!({ "error": "key value must not be empty" }));
         }
-        let path = paths::keys_file();
-        let mut store = KeyStore::load(&path);
+        let mut store = crate::store::store().keys().load();
         store.upsert(&name, value);
-        match store.save(&path) {
+        match crate::store::store().keys().save(&store) {
             Ok(()) => Ok(serde_json::json!({
                 "saved": name,
                 "masked": crate::key_store::mask(value),
@@ -118,12 +115,11 @@ impl metalcraft::Tool for KeyDeleteTool {
     }
     async fn call(&self, args: serde_json::Value) -> metalcraft::Result<serde_json::Value> {
         let name = name_arg(&args, "key_delete")?;
-        let path = paths::keys_file();
-        let mut store = KeyStore::load(&path);
+        let mut store = crate::store::store().keys().load();
         if !store.delete(&name) {
             return Ok(serde_json::json!({ "error": format!("key '{name}' not found") }));
         }
-        match store.save(&path) {
+        match crate::store::store().keys().save(&store) {
             Ok(()) => Ok(serde_json::json!({ "deleted": name })),
             Err(e) => Ok(serde_json::json!({ "error": format!("failed to write key store: {e}") })),
         }
