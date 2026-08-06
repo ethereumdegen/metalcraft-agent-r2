@@ -27,10 +27,15 @@
 //! once pasted must never shadow the freshly injected one. For every other key,
 //! resolution stays store-first (so a user can override env-based defaults).
 //!
-//! Stored in **plaintext** — protection relies on OS file permissions, the same
-//! as the app's other on-disk state. Never log values; the workshop API only
-//! ever exposes [`mask`]ed previews.
+//! At rest the vault document is encrypted with AES-256-GCM when
+//! `METALCRAFT_STORE_KEY` is set (see [`seal`]/[`open`]); otherwise it is stored
+//! plaintext and protected only by OS file permissions, as before. Legacy
+//! plaintext documents always load. Never log values; the workshop API only ever
+//! exposes [`mask`]ed previews.
 
+use aes_gcm::aead::{Aead, OsRng};
+use aes_gcm::{AeadCore, Aes256Gcm, Key, KeyInit, Nonce};
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -90,8 +95,8 @@ impl KeyStore {
     /// Load the current vault through the active storage backend (files or sqlite), applying legacy
     /// migration. This is the path used by all runtime lookups + the Keys API.
     pub fn load_current() -> Self {
-        let content = crate::store::store().docs().get("keys").unwrap_or_default();
-        Self::from_json_str(&content)
+        let stored = crate::store::store().docs().get("keys").unwrap_or_default();
+        Self::from_json_str(&open(&stored))
     }
 
     /// Parse a vault document (v2 JSON, legacy flat map, or empty) into a [`KeyStore`], never
@@ -309,6 +314,83 @@ pub fn resolve(name: &str, stored: Option<String>, env: Option<String>) -> Optio
     stored.or(env)
 }
 
+// ── at-rest encryption for the keys vault ────────────────────────────────────
+//
+// The vault is stored as one JSON document (via the DocStore). When
+// `METALCRAFT_STORE_KEY` is set we encrypt that document with AES-256-GCM so a
+// leaked `agent.db`/`keys.json` (e.g. a stray R2/Litestream copy) doesn't expose
+// secrets. Without the key we passthrough plaintext (unchanged behavior), and a
+// legacy plaintext document always loads (no marker prefix). The env/crypto split
+// keeps `seal_with`/`open_with` pure and unit-testable.
+
+/// Marker prefix on an encrypted vault document. Its absence means legacy plaintext.
+const ENC_PREFIX: &str = "enc:v1:";
+
+fn b64(bytes: &[u8]) -> String {
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+fn b64_decode(s: &str) -> Option<Vec<u8>> {
+    base64::engine::general_purpose::STANDARD.decode(s).ok()
+}
+
+/// The 32-byte at-rest key from `METALCRAFT_STORE_KEY` (base64 or hex), if configured.
+fn store_key() -> Option<[u8; 32]> {
+    let raw = std::env::var("METALCRAFT_STORE_KEY").ok()?;
+    let raw = raw.trim();
+    let bytes = b64_decode(raw).or_else(|| hex::decode(raw).ok())?;
+    <[u8; 32]>::try_from(bytes.as_slice()).ok()
+}
+
+fn seal_with(key: &[u8; 32], plaintext: &str) -> String {
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+    let ct = cipher
+        .encrypt(&nonce, plaintext.as_bytes())
+        .expect("AES-256-GCM encryption of the keys vault failed");
+    let mut blob = nonce.to_vec();
+    blob.extend_from_slice(&ct);
+    format!("{ENC_PREFIX}{}", b64(&blob))
+}
+
+fn open_with(key: Option<&[u8; 32]>, stored: &str) -> String {
+    let Some(rest) = stored.strip_prefix(ENC_PREFIX) else {
+        return stored.to_string(); // legacy plaintext
+    };
+    let Some(key) = key else {
+        log::error!("keys vault is encrypted but METALCRAFT_STORE_KEY is unset; treating as empty");
+        return String::new();
+    };
+    let blob = match b64_decode(rest) {
+        Some(b) if b.len() > 12 => b,
+        _ => {
+            log::error!("keys vault ciphertext is malformed; treating as empty");
+            return String::new();
+        }
+    };
+    let (nonce, ct) = blob.split_at(12);
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    match cipher.decrypt(Nonce::from_slice(nonce), ct) {
+        Ok(pt) => String::from_utf8_lossy(&pt).into_owned(),
+        Err(_) => {
+            log::error!("keys vault failed to decrypt (wrong METALCRAFT_STORE_KEY?); treating as empty");
+            String::new()
+        }
+    }
+}
+
+/// Encrypt a vault document for storage when `METALCRAFT_STORE_KEY` is set; passthrough otherwise.
+pub(crate) fn seal(plaintext: &str) -> String {
+    match store_key() {
+        Some(k) => seal_with(&k, plaintext),
+        None => plaintext.to_string(),
+    }
+}
+
+/// Decrypt a stored vault document (passthrough for legacy plaintext / no marker).
+pub(crate) fn open(stored: &str) -> String {
+    open_with(store_key().as_ref(), stored)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,6 +413,35 @@ mod tests {
         let store = KeyStore::load(&path);
         assert!(store.list_masked().is_empty());
         assert!(store.list_scoped().is_empty());
+    }
+
+    #[test]
+    fn seal_open_round_trip() {
+        let key = [7u8; 32];
+        let sealed = seal_with(&key, "{\"version\":2}");
+        assert!(sealed.starts_with(ENC_PREFIX));
+        assert_ne!(sealed, "{\"version\":2}"); // actually encrypted
+        assert_eq!(open_with(Some(&key), &sealed), "{\"version\":2}");
+    }
+
+    #[test]
+    fn open_passes_through_legacy_plaintext() {
+        // No marker prefix → returned as-is, even with a key configured.
+        assert_eq!(open_with(Some(&[1u8; 32]), "{\"a\":1}"), "{\"a\":1}");
+        assert_eq!(open_with(None, "{\"a\":1}"), "{\"a\":1}");
+    }
+
+    #[test]
+    fn open_wrong_key_or_missing_key_is_empty() {
+        let sealed = seal_with(&[7u8; 32], "secret");
+        assert_eq!(open_with(Some(&[9u8; 32]), &sealed), ""); // wrong key
+        assert_eq!(open_with(None, &sealed), ""); // encrypted but no key
+    }
+
+    #[test]
+    fn nonce_is_randomized() {
+        let key = [3u8; 32];
+        assert_ne!(seal_with(&key, "x"), seal_with(&key, "x")); // fresh nonce each time
     }
 
     #[test]

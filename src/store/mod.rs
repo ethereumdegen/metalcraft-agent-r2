@@ -298,7 +298,8 @@ impl KeysStore for FilesKeys {
     }
     fn save(&self, ks: &KeyStore) -> std::io::Result<()> {
         let json = serde_json::to_string_pretty(ks).map_err(std::io::Error::other)?;
-        store().docs().put("keys", &json)
+        // Encrypt at rest when METALCRAFT_STORE_KEY is set (passthrough otherwise).
+        store().docs().put("keys", &crate::key_store::seal(&json))
     }
     fn lookup(&self, name: &str) -> Option<String> {
         crate::key_store::lookup(name)
