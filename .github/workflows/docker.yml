@@ -1,4 +1,5 @@
 name: build-and-push
+# GHCR image build for metalcraft-agent-r2 (fork).
 
 # Builds the daemon image on GitHub's runners and pushes it to GHCR so the VPS
 # never has to compile Rust. Triggers:
