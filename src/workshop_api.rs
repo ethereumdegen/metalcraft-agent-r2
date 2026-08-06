@@ -1612,7 +1612,7 @@ impl From<ChatMessageWire> for AgentMessage {
 /// the optional `AgentState` to a plain message vec so the file is human-
 /// readable and tolerant of metalcraft API changes.
 #[derive(Serialize, Deserialize)]
-struct PersistedChat {
+pub(crate) struct PersistedChat {
     id: String,
     persona_slug: String,
     model_name: String,
@@ -1649,57 +1649,18 @@ async fn persist_chat(session: &Arc<Mutex<ChatSession>>) {
                 .unwrap_or_default(),
         }
     };
-    let path = chat_file_path(&snapshot.id);
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    match serde_json::to_string_pretty(&snapshot) {
-        Ok(json) => {
-            if let Err(e) = std::fs::write(&path, json) {
-                log::warn!("failed to persist chat {}: {e}", snapshot.id);
-            }
-        }
-        Err(e) => log::warn!("failed to serialize chat {}: {e}", snapshot.id),
-    }
+    crate::store::store().chats().save(&snapshot.id, &snapshot);
 }
 
 fn remove_chat_file(id: &str) {
-    let path = chat_file_path(id);
-    if path.exists() {
-        if let Err(e) = std::fs::remove_file(&path) {
-            log::warn!("failed to delete chat file {}: {e}", path.display());
-        }
-    }
+    crate::store::store().chats().delete(id);
 }
 
 /// Load all chats from `<data>/chats/` into the in-memory store. Called once
 /// at startup. Any chat whose file is malformed is logged and skipped.
 fn load_persisted_chats() -> HashMap<String, Arc<Mutex<ChatSession>>> {
-    let dir = paths::chats_dir();
-    let entries = match std::fs::read_dir(&dir) {
-        Ok(rd) => rd,
-        Err(_) => return HashMap::new(),
-    };
     let mut out = HashMap::new();
-    for entry in entries.filter_map(|e| e.ok()) {
-        let path = entry.path();
-        if path.extension().and_then(|x| x.to_str()) != Some("json") {
-            continue;
-        }
-        let content = match std::fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(e) => {
-                log::warn!("failed to read chat file {}: {e}", path.display());
-                continue;
-            }
-        };
-        let pc: PersistedChat = match serde_json::from_str(&content) {
-            Ok(c) => c,
-            Err(e) => {
-                log::warn!("failed to parse chat file {}: {e}", path.display());
-                continue;
-            }
-        };
+    for pc in crate::store::store().chats().load_all() {
         let state = if pc.messages.is_empty() {
             None
         } else {
@@ -1791,23 +1752,7 @@ async fn list_chats(State(_state): State<Arc<ApiState>>) -> Response {
 /// Malformed files are logged and skipped. Shared by the list endpoint and
 /// startup load.
 fn read_persisted_chats() -> Vec<PersistedChat> {
-    let dir = paths::chats_dir();
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    for entry in entries.filter_map(|e| e.ok()) {
-        let path = entry.path();
-        if path.extension().and_then(|x| x.to_str()) != Some("json") {
-            continue;
-        }
-        match std::fs::read_to_string(&path).map(|c| serde_json::from_str::<PersistedChat>(&c)) {
-            Ok(Ok(pc)) => out.push(pc),
-            Ok(Err(e)) => log::warn!("failed to parse chat file {}: {e}", path.display()),
-            Err(e) => log::warn!("failed to read chat file {}: {e}", path.display()),
-        }
-    }
-    out
+    crate::store::store().chats().load_all()
 }
 
 #[utoipa::path(
