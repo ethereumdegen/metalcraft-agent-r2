@@ -13,8 +13,9 @@ RUN mkdir -p src/bin && \
 
 COPY src ./src
 COPY seed ./seed
+# Build the daemon (the server) + the CLI (carries the `migrate-store` files→sqlite importer).
 RUN touch src/main.rs src/lib.rs src/bin/metalcraft-daemon.rs && \
-    cargo build --release --bin metalcraft-daemon
+    cargo build --release --bin metalcraft-daemon --bin metalcraft-agent
 
 # ── Runtime ──────────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
@@ -22,6 +23,7 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/metalcraft-daemon /usr/local/bin/metalcraft-daemon
+COPY --from=builder /app/target/release/metalcraft-agent /usr/local/bin/metalcraft-agent
 COPY seed /opt/metalcraft/seed
 
 ENV RUST_LOG=info
