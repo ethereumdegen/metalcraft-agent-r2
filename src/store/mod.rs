@@ -9,6 +9,8 @@
 //! The trait deals in the *serialized* DTOs (e.g. `PersistedChat`), never the in-memory session
 //! types — rehydration into `ChatSession`/`AgentState` stays in `workshop_api`.
 
+mod sqlite;
+
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
@@ -100,12 +102,19 @@ pub(crate) fn store() -> &'static dyn Store {
     static STORE: OnceLock<Box<dyn Store>> = OnceLock::new();
     STORE
         .get_or_init(|| match std::env::var("METALCRAFT_STORE").as_deref() {
-            Ok("sqlite") => {
-                log::warn!(
-                    "METALCRAFT_STORE=sqlite is not implemented yet (S2); using the files backend"
-                );
-                Box::new(FilesStore)
-            }
+            Ok("sqlite") => match sqlite::SqliteStore::open_default() {
+                Ok(s) => {
+                    log::info!("storage backend: sqlite ({})", sqlite::default_db_path().display());
+                    Box::new(s)
+                }
+                Err(e) => {
+                    log::error!(
+                        "METALCRAFT_STORE=sqlite: could not open the database ({e}); \
+                         falling back to the files backend"
+                    );
+                    Box::new(FilesStore)
+                }
+            },
             _ => Box::new(FilesStore),
         })
         .as_ref()
@@ -113,7 +122,14 @@ pub(crate) fn store() -> &'static dyn Store {
 
 // ---- files backend -------------------------------------------------------------------------
 
-struct FilesStore;
+/// The shared files-backed instance, reused by the sqlite backend for the stores it does not
+/// (yet) own (scheduled/keys/gateway/packs).
+pub(super) fn files_backend() -> &'static FilesStore {
+    static F: FilesStore = FilesStore;
+    &F
+}
+
+pub(super) struct FilesStore;
 
 impl Store for FilesStore {
     fn chats(&self) -> &dyn ChatStore {

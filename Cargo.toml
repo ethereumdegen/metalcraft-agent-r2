@@ -49,6 +49,7 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 imap = "2"
 mail-parser = "0.11"
 native-tls = "0.2"
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [[bin]]
 name = "metalcraft-agent"
