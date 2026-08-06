@@ -234,11 +234,18 @@ This is a *contract*, not new subsystems — B later puts a TS DO in front of th
   fine to lose across restarts (a tool re-fetches as needed), and durable object storage is already an
   explicit agent action via the `spaces`/S3 tool. Container config just needs `METALCRAFT_UPLOAD_ROOT`
   on a writable path (default `<data>/uploads` works); it is intentionally **not** Litestream-backed.
-- **S5 — migration importer + Litestream.** `migrate-store`; WAL/path guarantees; scratch-DB test.
-- **S6 — chat seam.** Formalize `/api/v1/chats/{id}/turn` SSE contract + docs for B.
+- **S5 — migration importer + Litestream (DONE).** `metalcraft-agent migrate-store` imports the
+  files-backed `<data>/` state into `agent.db` (docs copied verbatim so an encrypted keys vault stays
+  encrypted; chats → chats+messages rows; flow runs), idempotent, with an end-to-end scratch-dir test.
+  Litestream is wired in `metalcraft-do-cluster/container/` (`Dockerfile` installs litestream + the
+  `metalcraft-agent-r2` binary; `litestream.yml` replicates `/data/agent.db` → `R2 agents/${SUB}/agent.db`;
+  `entrypoint.sh` = `litestream restore` then `replicate -exec metalcraft-agent`). The AgentDO injects
+  `METALCRAFT_STORE=sqlite`, `METALCRAFT_STORE_KEY`, `SUB`, and R2/Litestream creds.
+- **S6 — chat seam (TODO).** Formalize the `/api/v1/chats/{id}/turn` SSE contract + docs so
+  architecture B's `SessionDO` can front a single chat.
 
-Then `metalcraft-do-cluster` swaps its container entrypoint from tar (Option A/M0) to
-`litestream replicate -exec`, and points its image at `metalcraft-agent-r2`.
+With S1–S5 done, `metalcraft-do-cluster` points its container image at `metalcraft-agent-r2` and runs
+it under `litestream replicate -exec` — one WAL `agent.db` per user, replicated to R2.
 
 ---
 
