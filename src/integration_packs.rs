@@ -165,10 +165,9 @@ pub fn list_installed() -> Vec<Pack> {
 
 /// Read the on-disk state map, defaulting to empty (all packs disabled).
 pub fn load_state() -> HashMap<String, PackState> {
-    let path = paths::integration_packs_state_file();
-    let content = match std::fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(_) => return HashMap::new(),
+    let content = match crate::store::store().docs().get("integration_packs") {
+        Some(c) => c,
+        None => return HashMap::new(),
     };
     serde_json::from_str(&content).unwrap_or_else(|e| {
         log::warn!("integration_packs.json is malformed, ignoring: {e}");
@@ -177,24 +176,11 @@ pub fn load_state() -> HashMap<String, PackState> {
 }
 
 fn save_state(state: &HashMap<String, PackState>) -> std::io::Result<()> {
-    let path = paths::integration_packs_state_file();
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    std::fs::create_dir_all(parent)?;
     let json = serde_json::to_string_pretty(state).map_err(std::io::Error::other)?;
-    // Atomic replace: write a sibling temp file, fsync it, then rename over the
-    // target. A crash or a concurrent reader never observes a half-written or
-    // truncated file — the old bare `fs::write` truncated first, so an
-    // interrupted or raced write left an empty file that read back as "no packs
-    // enabled". Safe with a fixed temp name because the only caller
-    // ([`mutate_state`]) holds the exclusive state lock across this write.
-    let tmp = path.with_extension("json.tmp");
-    {
-        let mut f = std::fs::File::create(&tmp)?;
-        std::io::Write::write_all(&mut f, json.as_bytes())?;
-        f.sync_all()?;
-    }
-    std::fs::rename(&tmp, &path)?;
-    Ok(())
+    // Durable + atomic: the DocStore does tmp+fsync+rename (files) or a transactional upsert
+    // (sqlite). The cross-process `.lock` held by [`mutate_state`] still serializes the whole
+    // read-modify-write so concurrent writers can't lose each other's updates.
+    crate::store::store().docs().put("integration_packs", &json)
 }
 
 /// Serialize the whole read-modify-write of the enable-state map across threads

@@ -14,7 +14,9 @@ use std::sync::Mutex;
 
 use rusqlite::Connection;
 
-use super::{ChatStore, FlowRunStore, GatewayStore, KeysStore, PackStore, ScheduledStore, Store};
+use super::{
+    ChatStore, DocStore, FlowRunStore, GatewayStore, KeysStore, PackStore, ScheduledStore, Store,
+};
 use crate::flow_runs::FlowRun;
 use crate::workshop_api::PersistedChat;
 
@@ -44,7 +46,8 @@ impl SqliteStore {
              PRAGMA synchronous=NORMAL;
              CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT);
              CREATE TABLE IF NOT EXISTS chats(id TEXT PRIMARY KEY, body TEXT NOT NULL);
-             CREATE TABLE IF NOT EXISTS flow_runs(id TEXT PRIMARY KEY, body TEXT NOT NULL);",
+             CREATE TABLE IF NOT EXISTS flow_runs(id TEXT PRIMARY KEY, body TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS docs(name TEXT PRIMARY KEY, body TEXT NOT NULL);",
         )?;
         Ok(Self { conn: Mutex::new(conn) })
     }
@@ -57,7 +60,12 @@ impl Store for SqliteStore {
     fn flow_runs(&self) -> &dyn FlowRunStore {
         self
     }
-    // Not yet migrated — delegate to the files backend (hybrid). See module docs.
+    fn docs(&self) -> &dyn DocStore {
+        self
+    }
+    // The collection stores keep their logic in their own modules; those modules persist through
+    // `store().docs()`, which is *this* SqliteStore's DocStore in sqlite mode — so delegating the
+    // facades to the files backend still lands the data in agent.db. No hybrid.
     fn scheduled(&self) -> &dyn ScheduledStore {
         super::files_backend().scheduled()
     }
@@ -69,6 +77,28 @@ impl Store for SqliteStore {
     }
     fn packs(&self) -> &dyn PackStore {
         super::files_backend().packs()
+    }
+}
+
+impl DocStore for SqliteStore {
+    fn get(&self, name: &str) -> Option<String> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT body FROM docs WHERE name=?1",
+            rusqlite::params![name],
+            |r| r.get::<_, String>(0),
+        )
+        .ok()
+    }
+    fn put(&self, name: &str, body: &str) -> std::io::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO docs(name, body) VALUES(?1, ?2)
+             ON CONFLICT(name) DO UPDATE SET body=excluded.body",
+            rusqlite::params![name, body],
+        )
+        .map_err(std::io::Error::other)?;
+        Ok(())
     }
 }
 
@@ -230,6 +260,19 @@ mod tests {
         assert_eq!(FlowRunStore::list(&s).len(), 1);
         assert_eq!(FlowRunStore::load(&s, "r1").unwrap().id, "r1");
         assert!(FlowRunStore::load(&s, "missing").is_none());
+    }
+
+    #[test]
+    fn docs_round_trip() {
+        let (_dir, s) = temp_store();
+        assert!(DocStore::get(&s, "scheduled_tasks").is_none());
+        DocStore::put(&s, "scheduled_tasks", "[]").unwrap();
+        assert_eq!(DocStore::get(&s, "scheduled_tasks").as_deref(), Some("[]"));
+        // upsert replaces
+        DocStore::put(&s, "scheduled_tasks", "[1]").unwrap();
+        assert_eq!(DocStore::get(&s, "scheduled_tasks").as_deref(), Some("[1]"));
+        // distinct names are independent
+        assert!(DocStore::get(&s, "keys").is_none());
     }
 
     #[test]

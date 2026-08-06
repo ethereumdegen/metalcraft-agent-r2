@@ -140,10 +140,9 @@ pub fn find_type(id: &str) -> Option<ChannelType> {
 /// Read the on-disk instance array, defaulting to empty. A malformed file is
 /// logged and treated as empty (never bricks the daemon).
 pub fn load_instances() -> Vec<ChannelInstance> {
-    let path = paths::gateway_channels_state_file();
-    let content = match std::fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(_) => return Vec::new(),
+    let content = match crate::store::store().docs().get("gateway_channels") {
+        Some(c) => c,
+        None => return Vec::new(),
     };
     if content.trim().is_empty() {
         return Vec::new();
@@ -155,14 +154,8 @@ pub fn load_instances() -> Vec<ChannelInstance> {
 }
 
 fn save_instances(instances: &[ChannelInstance]) -> std::io::Result<()> {
-    let path = paths::gateway_channels_state_file();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     let json = serde_json::to_string_pretty(instances).map_err(std::io::Error::other)?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json)?;
-    std::fs::rename(&tmp, path)
+    crate::store::store().docs().put("gateway_channels", &json)
 }
 
 pub fn get_instance(id: &str) -> Option<ChannelInstance> {

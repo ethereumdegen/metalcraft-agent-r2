@@ -37,6 +37,19 @@ pub(crate) trait Store: Send + Sync {
     fn keys(&self) -> &dyn KeysStore;
     fn gateway(&self) -> &dyn GatewayStore;
     fn packs(&self) -> &dyn PackStore;
+    fn docs(&self) -> &dyn DocStore;
+}
+
+/// Low-level named-JSON-document persistence. The logic-bearing collection modules
+/// (`scheduled_tasks`, `gateway_channels`, `integration_packs`, the keys vault) keep their parsing,
+/// migration and locking, and persist the raw document through this seam — so their behavior is
+/// backend-agnostic. Files backend maps `name -> <data>/<name>.json` (identical to the historical
+/// files); sqlite backend maps to a `docs(name, body)` table in `agent.db`.
+pub(crate) trait DocStore: Send + Sync {
+    /// The document body, or `None` if it has never been written.
+    fn get(&self, name: &str) -> Option<String>;
+    /// Create or replace the document, durably (atomic rename / transactional upsert).
+    fn put(&self, name: &str, body: &str) -> std::io::Result<()>;
 }
 
 /// Persistence for chat transcripts (`<data>/chats/<id>.json` in the files backend).
@@ -156,6 +169,34 @@ impl Store for FilesStore {
         static PACKS: FilesPacks = FilesPacks;
         &PACKS
     }
+    fn docs(&self) -> &dyn DocStore {
+        static DOCS: FilesDocs = FilesDocs;
+        &DOCS
+    }
+}
+
+/// Files backend for named JSON documents: `name -> <data>/<name>.json`, atomic (tmp + fsync +
+/// rename). The fsync matches the strongest historical behavior (integration_packs) and is safe to
+/// apply to the others.
+struct FilesDocs;
+
+impl DocStore for FilesDocs {
+    fn get(&self, name: &str) -> Option<String> {
+        std::fs::read_to_string(crate::paths::data_dir().join(format!("{name}.json"))).ok()
+    }
+    fn put(&self, name: &str, body: &str) -> std::io::Result<()> {
+        let path = crate::paths::data_dir().join(format!("{name}.json"));
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let tmp = path.with_extension("json.tmp");
+        {
+            let mut f = std::fs::File::create(&tmp)?;
+            std::io::Write::write_all(&mut f, body.as_bytes())?;
+            f.sync_all()?;
+        }
+        std::fs::rename(&tmp, &path)
+    }
 }
 
 struct FilesChats;
@@ -252,10 +293,12 @@ struct FilesKeys;
 
 impl KeysStore for FilesKeys {
     fn load(&self) -> KeyStore {
-        KeyStore::load(&crate::paths::keys_file())
+        // Loads via the active DocStore (files or sqlite), applying legacy migration.
+        KeyStore::load_current()
     }
     fn save(&self, ks: &KeyStore) -> std::io::Result<()> {
-        ks.save(&crate::paths::keys_file())
+        let json = serde_json::to_string_pretty(ks).map_err(std::io::Error::other)?;
+        store().docs().put("keys", &json)
     }
     fn lookup(&self, name: &str) -> Option<String> {
         crate::key_store::lookup(name)

@@ -35,8 +35,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::paths;
-
 /// Which namespace a key belongs to. Extensible — `Persona`/`Pack` scopes can be
 /// added without touching the on-disk layout beyond a new `channels`-like map.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,21 +81,34 @@ impl KeyStore {
     /// migrated in-memory into the `Global` scope — persisted on the next
     /// [`save`](Self::save).
     pub fn load(path: &Path) -> Self {
-        let content = match std::fs::read_to_string(path) {
-            Ok(c) => c,
-            Err(_) => return Self::default(),
-        };
+        match std::fs::read_to_string(path) {
+            Ok(content) => Self::from_json_str(&content),
+            Err(_) => Self::default(),
+        }
+    }
+
+    /// Load the current vault through the active storage backend (files or sqlite), applying legacy
+    /// migration. This is the path used by all runtime lookups + the Keys API.
+    pub fn load_current() -> Self {
+        let content = crate::store::store().docs().get("keys").unwrap_or_default();
+        Self::from_json_str(&content)
+    }
+
+    /// Parse a vault document (v2 JSON, legacy flat map, or empty) into a [`KeyStore`], never
+    /// failing — malformed input logs and yields the default. Migration to v2 happens in-memory
+    /// and is persisted on the next [`save`](Self::save)/put.
+    pub fn from_json_str(content: &str) -> Self {
         if content.trim().is_empty() {
             return Self::default();
         }
-        let value: serde_json::Value = match serde_json::from_str(&content) {
+        let value: serde_json::Value = match serde_json::from_str(content) {
             Ok(v) => v,
             Err(e) => {
                 log::warn!("keys.json is malformed, ignoring: {e}");
                 return Self::default();
             }
         };
-        // v2 files carry a numeric `version`; anything else is the legacy flat map.
+        // v2 documents carry a numeric `version`; anything else is the legacy flat map.
         if value.get("version").and_then(|v| v.as_u64()).is_some() {
             match serde_json::from_value::<KeyStore>(value) {
                 Ok(store) => store,
@@ -266,7 +277,7 @@ pub fn is_env_authoritative(name: &str) -> bool {
 /// stale keys.json entry. This is the single resolution point for `$VAR`
 /// expansion in HTTP-API tools. Returns `None` if set in neither place.
 pub fn lookup(name: &str) -> Option<String> {
-    let stored = KeyStore::load(&paths::keys_file()).get(name).map(str::to_string);
+    let stored = KeyStore::load_current().get(name).map(str::to_string);
     let env = std::env::var(name).ok();
     resolve(name, stored, env)
 }
@@ -276,7 +287,7 @@ pub fn lookup(name: &str) -> Option<String> {
 /// Env-authoritative keys keep their global precedence rule.
 pub fn lookup_scoped(channel_id: Option<&str>, name: &str) -> Option<String> {
     if let Some(id) = channel_id {
-        let store = KeyStore::load(&paths::keys_file());
+        let store = KeyStore::load_current();
         if let Some(v) = store.get_channel(id, name).filter(|s| !s.is_empty()) {
             return Some(v.to_string());
         }

@@ -159,25 +159,18 @@ fn new_id() -> String {
 // ── persistence ─────────────────────────────────────────────────────────────
 
 fn load_unlocked() -> Vec<ScheduledTask> {
-    let path = crate::paths::scheduled_tasks_file();
-    match std::fs::read_to_string(&path) {
-        Ok(content) => serde_json::from_str(&content).unwrap_or_else(|e| {
+    match crate::store::store().docs().get("scheduled_tasks") {
+        Some(content) => serde_json::from_str(&content).unwrap_or_else(|e| {
             log::warn!("scheduled_tasks.json is corrupt ({e}); starting empty");
             Vec::new()
         }),
-        Err(_) => Vec::new(),
+        None => Vec::new(),
     }
 }
 
 fn save_unlocked(tasks: &[ScheduledTask]) -> std::io::Result<()> {
-    let path = crate::paths::scheduled_tasks_file();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     let json = serde_json::to_string_pretty(tasks).map_err(std::io::Error::other)?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, json)?;
-    std::fs::rename(&tmp, path)
+    crate::store::store().docs().put("scheduled_tasks", &json)
 }
 
 /// All tasks, newest-scheduled first.
