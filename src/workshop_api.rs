@@ -102,6 +102,10 @@ struct ChatSession {
     /// Inbound gateway messages that arrived while a turn was already running,
     /// drained FIFO when the in-flight turn finishes. Empty for workshop chats.
     pending: std::collections::VecDeque<String>,
+    /// How many messages have already been persisted, so [`persist_chat`] can
+    /// append only the new ones. Reset via a full rewrite if the count regresses
+    /// (the gateway idle-reset drops history).
+    persisted_count: usize,
 }
 
 /// Build a [`TraceLogger`] keyed to a diagnostics logger's session-dir name, so
@@ -1536,7 +1540,7 @@ struct ChatDetail {
 /// format for persisted chats, so it derives `Deserialize` too.
 #[derive(Serialize, Deserialize, Clone, utoipa::ToSchema)]
 #[serde(tag = "role", rename_all = "snake_case")]
-enum ChatMessageWire {
+pub(crate) enum ChatMessageWire {
     User { content: String },
     Assistant { content: String },
     /// A reasoning item preserved so it can be replayed with its tool call on a
@@ -1611,17 +1615,17 @@ impl From<ChatMessageWire> for AgentMessage {
 /// readable and tolerant of metalcraft API changes.
 #[derive(Serialize, Deserialize)]
 pub(crate) struct PersistedChat {
-    id: String,
-    persona_slug: String,
-    model_name: String,
-    cwd: String,
-    created_at: String,
+    pub(crate) id: String,
+    pub(crate) persona_slug: String,
+    pub(crate) model_name: String,
+    pub(crate) cwd: String,
+    pub(crate) created_at: String,
     /// Session I/O type. Defaults to `Workshop` so chats written before this
     /// field existed still load.
     #[serde(default)]
-    preset: SessionPreset,
+    pub(crate) preset: SessionPreset,
     #[serde(default)]
-    messages: Vec<ChatMessageWire>,
+    pub(crate) messages: Vec<ChatMessageWire>,
 }
 
 fn chat_file_path(id: &str) -> std::path::PathBuf {
@@ -1631,23 +1635,54 @@ fn chat_file_path(id: &str) -> std::path::PathBuf {
 /// Snapshot the session and write it to disk. Holds the mutex briefly to
 /// collect data, drops it before the (synchronous) write.
 async fn persist_chat(session: &Arc<Mutex<ChatSession>>) {
-    let snapshot = {
-        let s = session.lock().await;
-        PersistedChat {
-            id: s.id.clone(),
-            persona_slug: s.persona_slug.clone(),
-            model_name: s.model_name.clone(),
-            cwd: s.cwd.clone(),
-            created_at: s.created_at.clone(),
-            preset: s.preset.clone(),
-            messages: s
-                .state
-                .as_ref()
-                .map(|st| st.messages.iter().map(ChatMessageWire::from).collect())
-                .unwrap_or_default(),
+    // Decide (under the lock) whether this is a cheap append or a full rewrite, then do the I/O
+    // after dropping the lock. Messages are append-only across turns (verified), so the common case
+    // appends `messages[persisted_count..]`. The one exception — the gateway idle-reset sets
+    // `state = None`, shrinking the count — is caught by the `n < cursor` regression guard and
+    // handled with a full `replace`.
+    enum Op {
+        Replace(PersistedChat),
+        Append { id: String, from: usize, msgs: Vec<ChatMessageWire> },
+        Noop,
+    }
+
+    let op = {
+        let mut s = session.lock().await;
+        let msgs: Vec<ChatMessageWire> = s
+            .state
+            .as_ref()
+            .map(|st| st.messages.iter().map(ChatMessageWire::from).collect())
+            .unwrap_or_default();
+        let n = msgs.len();
+        let cursor = s.persisted_count;
+        s.persisted_count = n;
+
+        if cursor == 0 || n < cursor {
+            Op::Replace(PersistedChat {
+                id: s.id.clone(),
+                persona_slug: s.persona_slug.clone(),
+                model_name: s.model_name.clone(),
+                cwd: s.cwd.clone(),
+                created_at: s.created_at.clone(),
+                preset: s.preset.clone(),
+                messages: msgs,
+            })
+        } else if n > cursor {
+            Op::Append { id: s.id.clone(), from: cursor, msgs: msgs[cursor..].to_vec() }
+        } else {
+            Op::Noop
         }
     };
-    crate::store::store().chats().save(&snapshot.id, &snapshot);
+
+    let chats = crate::store::store().chats();
+    match op {
+        Op::Replace(pc) => {
+            let id = pc.id.clone();
+            chats.replace(&id, &pc);
+        }
+        Op::Append { id, from, msgs } => chats.append(&id, from, &msgs),
+        Op::Noop => {}
+    }
 }
 
 fn remove_chat_file(id: &str) {
@@ -1659,6 +1694,8 @@ fn remove_chat_file(id: &str) {
 fn load_persisted_chats() -> HashMap<String, Arc<Mutex<ChatSession>>> {
     let mut out = HashMap::new();
     for pc in crate::store::store().chats().load_all() {
+        // Everything on disk is already persisted — start the append cursor there.
+        let msg_count = pc.messages.len();
         let state = if pc.messages.is_empty() {
             None
         } else {
@@ -1703,6 +1740,7 @@ fn load_persisted_chats() -> HashMap<String, Arc<Mutex<ChatSession>>> {
             busy: false, // anything that was busy at shutdown couldn't have
                           // finished cleanly; reset so the user can retry.
             pending: std::collections::VecDeque::new(),
+            persisted_count: msg_count,
         };
         out.insert(pc.id.clone(), Arc::new(Mutex::new(session)));
     }
@@ -1790,6 +1828,7 @@ async fn post_create_chat(
         trace,
         busy: false,
         pending: std::collections::VecDeque::new(),
+        persisted_count: 0,
     };
     let session_arc = Arc::new(Mutex::new(session));
     {
@@ -3593,6 +3632,7 @@ async fn get_or_create_gateway_session(
         trace: None,
         busy: false,
         pending: std::collections::VecDeque::new(),
+        persisted_count: 0,
     };
     let arc = Arc::new(Mutex::new(session));
     {

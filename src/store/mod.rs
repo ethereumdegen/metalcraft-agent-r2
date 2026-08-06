@@ -21,7 +21,7 @@ use crate::gateway_channels::ChannelInstance;
 use crate::integration_packs::PackState;
 use crate::key_store::KeyStore;
 use crate::scheduled_tasks::{NewTask, ScheduledTask, TaskStatus};
-use crate::workshop_api::PersistedChat;
+use crate::workshop_api::{ChatMessageWire, PersistedChat};
 
 /// The storage port. One process-wide instance, obtained via [`store`].
 ///
@@ -52,10 +52,20 @@ pub(crate) trait DocStore: Send + Sync {
     fn put(&self, name: &str, body: &str) -> std::io::Result<()>;
 }
 
-/// Persistence for chat transcripts (`<data>/chats/<id>.json` in the files backend).
+/// Persistence for chat transcripts. Writes are split so the common per-turn path only *appends*
+/// new messages (a small Litestream delta) instead of rewriting the whole transcript:
+/// - [`replace`](Self::replace): full write — creating a chat, or resetting one whose message count
+///   regressed (the gateway idle-reset drops history). Callers use it when `messages.len() <
+///   persisted_count` or on first persist.
+/// - [`append`](Self::append): the hot path — add messages at `seq >= from_seq`.
+///
+/// The append-only invariant (messages never mutate/truncate in place except the idle-reset, which
+/// the `replace` fallback covers) was verified against the agent's turn loop.
 pub(crate) trait ChatStore: Send + Sync {
-    /// Write the full transcript for `id`. Overwrites any existing copy.
-    fn save(&self, id: &str, chat: &PersistedChat);
+    /// Full write: replace metadata + all messages for `id`.
+    fn replace(&self, id: &str, chat: &PersistedChat);
+    /// Append `msgs` at sequence numbers `from_seq, from_seq+1, …` (idempotent per seq).
+    fn append(&self, id: &str, from_seq: usize, msgs: &[ChatMessageWire]);
     /// Load every persisted transcript. Malformed entries are logged and skipped.
     fn load_all(&self) -> Vec<PersistedChat>;
     /// Delete the transcript for `id` if present.
@@ -201,8 +211,8 @@ impl DocStore for FilesDocs {
 
 struct FilesChats;
 
-impl ChatStore for FilesChats {
-    fn save(&self, id: &str, chat: &PersistedChat) {
+impl FilesChats {
+    fn write(&self, id: &str, chat: &PersistedChat) {
         let path = crate::paths::chats_dir().join(format!("{id}.json"));
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -215,6 +225,28 @@ impl ChatStore for FilesChats {
             }
             Err(e) => log::warn!("failed to serialize chat {id}: {e}"),
         }
+    }
+    fn read(&self, id: &str) -> Option<PersistedChat> {
+        let path = crate::paths::chats_dir().join(format!("{id}.json"));
+        let content = std::fs::read_to_string(path).ok()?;
+        serde_json::from_str(&content).ok()
+    }
+}
+
+impl ChatStore for FilesChats {
+    fn replace(&self, id: &str, chat: &PersistedChat) {
+        self.write(id, chat);
+    }
+
+    // Files backend has no WAL-delta benefit; keep it correct by read-truncate-extend-rewrite.
+    fn append(&self, id: &str, from_seq: usize, msgs: &[ChatMessageWire]) {
+        let Some(mut pc) = self.read(id) else {
+            log::warn!("append to missing chat {id}; skipping");
+            return;
+        };
+        pc.messages.truncate(from_seq);
+        pc.messages.extend(msgs.iter().cloned());
+        self.write(id, &pc);
     }
 
     fn load_all(&self) -> Vec<PersistedChat> {
