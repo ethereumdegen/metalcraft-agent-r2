@@ -204,11 +204,15 @@ This is a *contract*, not new subsystems — B later puts a TS DO in front of th
   round-trip + WAL tests. Currently a **documented hybrid**: the logic-bearing collection stores
   (scheduled/keys/gateway/packs) are delegated to the files backend because their logic is intertwined
   with file I/O — backing them by reimplementing would risk divergence.
-- **S2b — collection stores → SQLite via a shared document seam (TODO).** Introduce a low-level
-  `DocStore` (get/set a named JSON document); refactor the ~6 private load/save primitives in
-  `scheduled_tasks`/`gateway_channels`/`integration_packs` (and the keys vault) to persist through it,
-  keeping their public logic unchanged. Then `sqlite` mode puts *all* state in `agent.db` (single
-  Litestream target), removing the hybrid.
+- **S2b — collection stores → SQLite via a shared document seam (DONE).** Added a low-level
+  `DocStore` (get/put a named JSON document) on the `Store` port. `FilesDocs` maps
+  `name → <data>/<name>.json` (atomic tmp+fsync+rename); `SqliteStore` gained a `docs(name, body)`
+  table. Refactored the private load/save primitives in `scheduled_tasks`/`gateway_channels`/
+  `integration_packs` and the keys vault (`KeyStore::load_current`/`from_json_str`,
+  `lookup`/`lookup_scoped`) to persist through `store().docs()`, keeping parsing/migration/locking.
+  Because the modules call the *global* store's docs, `sqlite` mode now puts **all** state in one
+  `agent.db` (single Litestream target) — the hybrid is gone; files mode is unchanged. sqlite tests
+  4/4, full suite green. Caveat: switching an existing files agent to sqlite starts empty (import = S5).
 - **S3 — hot-path + security.** Normalize chats into the append-only `messages` table (kill per-turn
   whole-transcript rewrite; needs a `ChatStore::append_message` + making `PersistedChat` fields
   reachable); AES-GCM `keys` at rest; transactional writes.
