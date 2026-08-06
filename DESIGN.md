@@ -217,12 +217,14 @@ This is a *contract*, not new subsystems — B later puts a TS DO in front of th
   `METALCRAFT_STORE_KEY` is set (random nonce, `enc:v1:` marker); passthrough + legacy plaintext load
   otherwise. Wired into `KeyStore::load_current` (open) + the save path (seal). Crypto + regression
   tests green. `aes-gcm 0.10`.
-- **S3b — append-only chat messages (IN PROGRESS).** Normalize chats into `chats(meta)` +
-  append-only `messages(chat_id, seq, body)` so a turn writes only new rows (Litestream ships a small
-  delta instead of the whole transcript). Needs a `ChatStore::append`/`upsert_meta` split, a
-  per-session persisted-message cursor in `persist_chat`, and `PersistedChat`'s message type reachable.
-  Gated on verifying messages are strictly append-only across persists (no in-place mutation/truncation
-  of already-persisted messages) — under analysis.
+- **S3b — append-only chat messages (DONE).** Split `ChatStore` into `replace` (full write) +
+  `append` (add messages at `seq >= from_seq`); normalized SQLite schema `chats(meta)` +
+  `messages(chat_id, seq, body)`. `persist_chat` tracks a per-session `persisted_count` cursor and
+  appends only `messages[cursor..]` in the common case → a turn writes a few rows and Litestream ships
+  a small WAL delta. Invariant analysis of the turn loop confirmed messages are append-only across
+  persists everywhere except the gateway idle-reset (`state=None` shrinks the count), which is caught
+  by the `n < cursor → full replace` guard (replace deletes stale message rows). Files backend keeps
+  whole-file writes. sqlite tests 5/5 (replace, idempotent append, idle-reset shrink), full suite green.
 - **S4 — uploads → R2.** Remove `uploads/` from disk.
 - **S5 — migration importer + Litestream.** `migrate-store`; WAL/path guarantees; scratch-DB test.
 - **S6 — chat seam.** Formalize `/api/v1/chats/{id}/turn` SSE contract + docs for B.
