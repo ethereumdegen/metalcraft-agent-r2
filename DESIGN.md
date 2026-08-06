@@ -213,9 +213,16 @@ This is a *contract*, not new subsystems — B later puts a TS DO in front of th
   Because the modules call the *global* store's docs, `sqlite` mode now puts **all** state in one
   `agent.db` (single Litestream target) — the hybrid is gone; files mode is unchanged. sqlite tests
   4/4, full suite green. Caveat: switching an existing files agent to sqlite starts empty (import = S5).
-- **S3 — hot-path + security.** Normalize chats into the append-only `messages` table (kill per-turn
-  whole-transcript rewrite; needs a `ChatStore::append_message` + making `PersistedChat` fields
-  reachable); AES-GCM `keys` at rest; transactional writes.
+- **S3a — keys at rest (DONE).** AES-256-GCM seal/open of the keys vault document when
+  `METALCRAFT_STORE_KEY` is set (random nonce, `enc:v1:` marker); passthrough + legacy plaintext load
+  otherwise. Wired into `KeyStore::load_current` (open) + the save path (seal). Crypto + regression
+  tests green. `aes-gcm 0.10`.
+- **S3b — append-only chat messages (IN PROGRESS).** Normalize chats into `chats(meta)` +
+  append-only `messages(chat_id, seq, body)` so a turn writes only new rows (Litestream ships a small
+  delta instead of the whole transcript). Needs a `ChatStore::append`/`upsert_meta` split, a
+  per-session persisted-message cursor in `persist_chat`, and `PersistedChat`'s message type reachable.
+  Gated on verifying messages are strictly append-only across persists (no in-place mutation/truncation
+  of already-persisted messages) — under analysis.
 - **S4 — uploads → R2.** Remove `uploads/` from disk.
 - **S5 — migration importer + Litestream.** `migrate-store`; WAL/path guarantees; scratch-DB test.
 - **S6 — chat seam.** Formalize `/api/v1/chats/{id}/turn` SSE contract + docs for B.
