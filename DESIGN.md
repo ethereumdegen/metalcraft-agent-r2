@@ -188,15 +188,30 @@ This is a *contract*, not new subsystems — B later puts a TS DO in front of th
     are the originals verbatim → zero behavior change. `cargo check` green.
     - Deferred within chats: `workshop_api.rs:~3541` still calls `chat_file_path` for an mtime check
       (a files-only detail); migrate when SQLite lands.
-  - **S1b — remaining stores (TODO, mechanical):** add `KeyStore`/`FlowRunStore`/`ScheduledStore`/
-    `GatewayStore`/`PackStore` sub-traits, each a `FilesStore` facade over today's fns, preserving the
-    in-module lock + atomicity semantics (tmp+rename where present, the `integration_packs` file lock,
-    the `scheduled_tasks`/`inbound_dedup` mutexes).
+  - **S1b — flow runs + collection stores (DONE).** Added `FlowRunStore` + `ScheduledStore`/
+    `KeysStore`/`GatewayStore`/`PackStore` sub-traits, each a `FilesStore` facade over today's fns
+    (preserving in-module locks + tmp+rename atomicity). Routed all call sites for: flow runs (10),
+    scheduled tasks (6 fns), key lookups + the `KeyStore` load-mutate-save vault, gateway *instance*
+    ops (9), and pack *enabled-state* (`is_enabled`/`set_enabled`/`load_state`). Deliberately left as
+    free functions: pure helpers (`mask`, `normalize_number`), file-layering resolvers
+    (`resolve_file`/`list_files_layered`), and seeded read-only content (channel types, installed pack
+    dirs). Full suite 24/24 targets + 134 lib tests green.
   - Baseline note: `tests/phase5_6_7_test.rs` is **pre-existing broken** upstream (11× E0533, stale vs
     the current `AgentUpdate` API) — not caused by this work; lib+bins compile clean.
-- **S2 — `SqliteStore` behind `METALCRAFT_STORE=sqlite`.** Schema + sqlx; all stores implemented;
-  run the full agent test suite against *both* backends.
-- **S3 — hot-path + security.** Append-only `messages`; AES-GCM `keys`; transactional writes.
+- **S2 — `SqliteStore` behind `METALCRAFT_STORE=sqlite` (DONE, chose `rusqlite`+bundled over sqlx —
+  the `Store` traits are sync).** `<data>/agent.db`, WAL + `busy_timeout` + NORMAL sync. Backs the
+  **blob-per-entity hot-write stores** (chats, flow runs) as `id → JSON body` tables, upsert on save;
+  round-trip + WAL tests. Currently a **documented hybrid**: the logic-bearing collection stores
+  (scheduled/keys/gateway/packs) are delegated to the files backend because their logic is intertwined
+  with file I/O — backing them by reimplementing would risk divergence.
+- **S2b — collection stores → SQLite via a shared document seam (TODO).** Introduce a low-level
+  `DocStore` (get/set a named JSON document); refactor the ~6 private load/save primitives in
+  `scheduled_tasks`/`gateway_channels`/`integration_packs` (and the keys vault) to persist through it,
+  keeping their public logic unchanged. Then `sqlite` mode puts *all* state in `agent.db` (single
+  Litestream target), removing the hybrid.
+- **S3 — hot-path + security.** Normalize chats into the append-only `messages` table (kill per-turn
+  whole-transcript rewrite; needs a `ChatStore::append_message` + making `PersistedChat` fields
+  reachable); AES-GCM `keys` at rest; transactional writes.
 - **S4 — uploads → R2.** Remove `uploads/` from disk.
 - **S5 — migration importer + Litestream.** `migrate-store`; WAL/path guarantees; scratch-DB test.
 - **S6 — chat seam.** Formalize `/api/v1/chats/{id}/turn` SSE contract + docs for B.
