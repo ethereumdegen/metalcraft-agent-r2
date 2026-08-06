@@ -63,3 +63,4 @@ path = "src/bin/metalcraft-daemon.rs"
 [dev-dependencies]
 spice-framework = "0.1"
 tempfile = "3"
+rusqlite = { version = "0.32", features = ["bundled"] }

@@ -143,6 +143,51 @@ pub(crate) fn store() -> &'static dyn Store {
         .as_ref()
 }
 
+/// Default sqlite database path (`<data>/agent.db`).
+pub fn default_sqlite_db_path() -> std::path::PathBuf {
+    sqlite::default_db_path()
+}
+
+/// Counts from a files → sqlite migration.
+pub struct MigrationStats {
+    pub docs: usize,
+    pub chats: usize,
+    pub flow_runs: usize,
+}
+
+/// One-shot import of the files-backed state under `<data>/` into a sqlite database at `db_path`.
+/// Reads through the files backend (raw doc bodies are copied verbatim, so an already-encrypted keys
+/// vault stays encrypted) and writes through a freshly-opened sqlite backend. Idempotent — every
+/// write is an upsert, so re-running is safe. Independent of the process-wide `store()` selection.
+pub fn migrate_files_to_sqlite(db_path: std::path::PathBuf) -> Result<MigrationStats, String> {
+    let files = FilesStore;
+    let sqlite = sqlite::SqliteStore::open(db_path).map_err(|e| format!("open sqlite: {e}"))?;
+    let mut stats = MigrationStats { docs: 0, chats: 0, flow_runs: 0 };
+
+    for name in ["keys", "scheduled_tasks", "gateway_channels", "integration_packs"] {
+        if let Some(body) = files.docs().get(name) {
+            sqlite
+                .docs()
+                .put(name, &body)
+                .map_err(|e| format!("copy doc {name}: {e}"))?;
+            stats.docs += 1;
+        }
+    }
+    for pc in files.chats().load_all() {
+        let id = pc.id.clone();
+        sqlite.chats().replace(&id, &pc);
+        stats.chats += 1;
+    }
+    for run in files.flow_runs().list() {
+        sqlite
+            .flow_runs()
+            .save(&run)
+            .map_err(|e| format!("copy flow run: {e}"))?;
+        stats.flow_runs += 1;
+    }
+    Ok(stats)
+}
+
 // ---- files backend -------------------------------------------------------------------------
 
 /// The shared files-backed instance, reused by the sqlite backend for the stores it does not

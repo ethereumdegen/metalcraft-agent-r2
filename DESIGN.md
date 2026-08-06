@@ -225,7 +225,15 @@ This is a *contract*, not new subsystems — B later puts a TS DO in front of th
   persists everywhere except the gateway idle-reset (`state=None` shrinks the count), which is caught
   by the `n < cursor → full replace` guard (replace deletes stale message rows). Files backend keeps
   whole-file writes. sqlite tests 5/5 (replace, idempotent append, idle-reset shrink), full suite green.
-- **S4 — uploads → R2.** Remove `uploads/` from disk.
+- **S4 — uploads (RESOLVED: no change needed).** Investigation corrected the earlier assumption:
+  `paths::upload_root()` (`<data>/uploads`, or `METALCRAFT_UPLOAD_ROOT`) is **not** durable agent
+  state — it is a read/write **scratch jail** for file-transfer tools (`http_api` multipart + the
+  `spaces` tool upload local files outward; the `spaces` download tool writes fetched files into it).
+  There is no inbound endpoint that stores user blobs for later retrieval. So there is nothing to move
+  to R2 and no `BlobStore` to build: on an ephemeral container `uploads/` is transient scratch that is
+  fine to lose across restarts (a tool re-fetches as needed), and durable object storage is already an
+  explicit agent action via the `spaces`/S3 tool. Container config just needs `METALCRAFT_UPLOAD_ROOT`
+  on a writable path (default `<data>/uploads` works); it is intentionally **not** Litestream-backed.
 - **S5 — migration importer + Litestream.** `migrate-store`; WAL/path guarantees; scratch-DB test.
 - **S6 — chat seam.** Formalize `/api/v1/chats/{id}/turn` SSE contract + docs for B.
 

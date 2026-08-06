@@ -117,6 +117,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let raw_args: Vec<String> = std::env::args().skip(1).collect();
 
+    // `migrate-store`: one-shot import of the files-backed <data>/ state into <data>/agent.db,
+    // for moving an existing agent onto METALCRAFT_STORE=sqlite. Idempotent.
+    if raw_args.first().map(String::as_str) == Some("migrate-store") {
+        let db = metalcraft_agent::store::default_sqlite_db_path();
+        match metalcraft_agent::store::migrate_files_to_sqlite(db.clone()) {
+            Ok(s) => {
+                println!(
+                    "migrate-store: imported {} docs, {} chats, {} flow runs into {}",
+                    s.docs,
+                    s.chats,
+                    s.flow_runs,
+                    db.display()
+                );
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!("{} migrate-store failed: {e}", ui::error("Error:"));
+                std::process::exit(1);
+            }
+        }
+    }
+
     let invocation = match cli::parse_cli_invocation(&raw_args) {
         Ok(inv) => inv,
         Err(e) => {
