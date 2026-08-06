@@ -241,11 +241,16 @@ This is a *contract*, not new subsystems — B later puts a TS DO in front of th
   `metalcraft-agent-r2` binary; `litestream.yml` replicates `/data/agent.db` → `R2 agents/${SUB}/agent.db`;
   `entrypoint.sh` = `litestream restore` then `replicate -exec metalcraft-agent`). The AgentDO injects
   `METALCRAFT_STORE=sqlite`, `METALCRAFT_STORE_KEY`, `SUB`, and R2/Litestream creds.
-- **S6 — chat seam (TODO).** Formalize the `/api/v1/chats/{id}/turn` SSE contract + docs so
-  architecture B's `SessionDO` can front a single chat.
+- **S6 — chat seam (DONE).** The seam already existed (`POST /api/v1/chats/{id}/turn` → SSE of
+  `ChatEvent`; `GET /api/v1/chats/{id}/events` → agent-initiated frames). Verified it's
+  connection-stateless — `post_chat_turn` persists via `persist_chat` → the `Store` (S3b), so dropping
+  the stream or hibernating the front-end loses no history. Formalized the contract (endpoints,
+  `ChatEvent` frame lifecycle, `409` single-flight, idempotent append, how B's `SessionDO` maps on) in
+  [docs/CHAT_SEAM.md](docs/CHAT_SEAM.md).
 
-With S1–S5 done, `metalcraft-do-cluster` points its container image at `metalcraft-agent-r2` and runs
-it under `litestream replicate -exec` — one WAL `agent.db` per user, replicated to R2.
+**S1–S6 complete.** `metalcraft-do-cluster` points its container image at `metalcraft-agent-r2` and runs
+it under `litestream replicate -exec` — one WAL `agent.db` per user, replicated to R2; the `SessionDO`
+fronts chats via the seam above.
 
 ---
 
